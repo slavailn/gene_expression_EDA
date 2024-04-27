@@ -1,0 +1,127 @@
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(arrayQualityMetrics)
+library(Biobase)
+library(limma)
+library(MatrixGenerics)
+library(pheatmap)
+library(RColorBrewer)
+
+setwd(<working_directory>)
+
+# Load GSE15573 data set using GEOquery, here I loaded saved 
+# data object from my system
+load("datasets/GSE15573/GSE15573_ESet.RData")
+show(eset)
+
+# --------------------------------------------------------------------# 
+# Examine metadata
+head(pData(eset))
+
+# Select clinico-pathological variables from sample metadata
+sample_data <- pData(eset)
+sample_data <- data.frame( Trait = sample_data$characteristics_ch1,
+                           Gender = sample_data$characteristics_ch1.1,
+                           Age = sample_data$characteristics_ch1.2)
+head(sample_data)
+tail(sample_data)
+
+# Modify the variable definitions to make them more palatable
+sample_data$Trait[sample_data$Trait == "status: Rheumatoid Arthritis Patient"] <- "RA"
+sample_data$Trait[sample_data$Trait == "status: Control"] <- "Control"
+sample_data$Gender <- gsub("gender: " , "", sample_data$Gender)
+sample_data$Age <- gsub("age: " , "", sample_data$Age)
+class(sample_data$Age) # age is still a character, we need to turn it into numbers
+sample_data$Age <- as.numeric(sample_data$Age)
+class(sample_data$Age)
+
+# Crosstabulate sample data
+table(sample_data$Trait, sample_data$Gender)
+# Female Male
+# Control     10    5
+# RA          14    4
+# The samples appear balanced relative to Gender, but the majority of samples
+# are female
+
+# Convert age to categorical variable
+sort(sample_data$Age)
+# 45 - 80 years age range, so big difference in patient ranges
+# We can separate the patients into middle-aged and old categories
+age_group<-cut(sample_data$Age, 
+                     breaks=c(44, 58, 81), right = T)
+age_group
+sample_data$age_group <- age_group
+table(sample_data$Trait, sample_data$age_group)
+# (45,58] (58,81]
+# Control      10       4
+# RA           8      10
+# Note that there are only 4 patients in old age control category
+
+# -------------------------------------------------------------------------- #
+# Explore array intensity distribution
+# Get expression matrix
+expr <- exprs(eset)
+head(expr)
+# Melt the expression matrix
+expr_melt <- melt(as.data.frame(expr))
+names(expr_melt) <- c("sample", "intensity")
+head(expr_melt)
+
+ggplot(expr_melt, aes(x=sample, y = log2(intensity))) +
+  geom_violin() + 
+  geom_boxplot(width = 0.1) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+ggsave("intensities_violin.pdf", device = "pdf", units = "in", 
+       width = 8, height = 5)  
+
+# Run array quality control analysis using arrayQualityMetrics
+arrayQualityMetrics(eset,
+                    outdir = "GSE15573_arrayQualityReport",
+                    force = T,
+                    do.logtransform = T,
+                    intgroup = c("characteristics_ch1"),
+                    spatial = TRUE,
+                    reporttitle = paste("arrayQualityMetrics report for", 
+                                        deparse(substitute(expressionset)))
+                    )
+
+
+# -------------------------------------------------------------------------- #
+# Cluster the samples
+# Transform gene expression values using Variance Stabilizing Transformation
+expr <- exprs(eset)
+expr <- log2(expr)
+head(expr)
+
+# Select top 500 genes with highest Mean Absolute Deviations (MAD)
+mads_sorted <- sort(rowMads(expr), decreasing = T)
+mads_sorted <- mads_sorted[1:500]
+head(mads_sorted)
+
+# Extract the matrix with top 500 most variable values
+top500 <- expr[which(rownames(expr) %in% names(mads_sorted)),]
+
+# Create column annotation for heatmap
+head(sample_data)
+rownames(sample_data) <- colnames(expr)
+
+# Cluster genes and samples, plot heatmap
+pdf("GSE15573_heatmap_top500.pdf", width = 7, height = 6)
+pheatmap(top500, 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name =
+                                                           "RdYlBu")))(100),
+         scale="row", 
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "ward.D2",
+         annotation_col = sample_data[,-3], 
+         show_rownames = F)
+dev.off()
+
+
+
+
+
+
+
